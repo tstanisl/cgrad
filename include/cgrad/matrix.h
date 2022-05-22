@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdlib.h>
+#include <string.h>
 
 typedef struct cmat {
 	int status;
@@ -18,7 +19,9 @@ typedef struct cmat {
 enum cmat_status {
 	CMAT_VALID = 0,
 	CMAT_DELETED,
-	CMAT_OUT_OF_MEMORY,
+	CMAT_ERR_OUT_OF_MEMORY,
+	CMAT_ERR_INVALID_OPERAND,
+	CMAT_ERR_CANT_BROADCAST,
 };
 
 
@@ -30,6 +33,8 @@ typedef union {
 inline bool cmat_is_valid(cmat m) { return m.rows > 0 && m.cols > 0; }
 inline bool cmat_is_scalar(cmat m) { return m.rows == 1 && m.cols == 1; }
 
+#define CMAT__DATA(m) (cmat_is_scalar(m) ? (m).scalar : (m).data)
+
 inline cmat_tmp cmat_move(cmat* m) {
 	cmat_tmp res = { .get = *m };
 	*m = (cmat) { .status = CMAT_DELETED };
@@ -40,13 +45,24 @@ inline cmat cmat_scalar(float val) {
 	return (cmat) { .rows = 1, .cols = 1, .scalar = val };
 }
 
+__attribute__((always_inline))
 inline cmat_tmp cmat_create(size_t rows, size_t cols) {
 	if (rows == 1 && cols == 1)
 		return (cmat_tmp) { .get = cmat_scalar(0.0f) };
 	cmat res = { .rows = rows, .cols = cols };
 	res.data = malloc(sizeof(float[rows][cols]));
-	if (!res.data) return (cmat_tmp) { 0 };
-	return (cmat_tmp) { .get = res };
+	if (!res.data)
+		return (cmat_tmp) { CMAT_ERR_OUT_OF_MEMORY };
+	return cmat_move(&res);
+}
+
+cmat cmat_wrap_array(size_t rows, size_t cols, float data[static rows][cols]);
+
+inline cmat_tmp cmat_from_array(size_t rows, size_t cols, float data[static rows][cols]) {
+	cmat res = cmat_create(rows, cols).get;
+	if (res.status == CMAT_VALID)
+		memcpy(CMAT__DATA(res), data, sizeof(float[rows][cols]));
+	return cmat_move(&res);
 }
 
 inline void cmat_del(cmat *m) {
@@ -55,7 +71,7 @@ inline void cmat_del(cmat *m) {
 	*m = (cmat) { .status = CMAT_DELETED };
 }
 
-#define CMAT_TO_VLA(m, vla) float (*vla)[m.cols] = cmat_is_scalar(m) ? m.scalar : m.data
+#define CMAT_TO_VLA(m, vla) float (*vla)[m.cols] = CMAT__DATA(m)
 
 #define cmat_add cmat_add_mm
 
@@ -72,6 +88,7 @@ bool cmat_is_valid(cmat m);
 bool cmat_is_scalar(cmat m);
 cmat cmat_scalar(float val);
 cmat_tmp cmat_create(size_t rows, size_t cols);
+cmat_tmp cmat_from_array(size_t rows, size_t cols, float data[static rows][cols]);
 void cmat_del(cmat* m);
 cmat_tmp cmat_move(cmat* m);
 
@@ -79,9 +96,16 @@ cmat_tmp cmat_add_mm(cmat a, cmat b) {
 	size_t rows = a.rows > b.rows ? a.rows : b.rows;
 	size_t cols = a.cols > b.cols ? a.cols : b.cols;
 
+	if (a.status != CMAT_VALID || b.status != CMAT_VALID)
+		return (cmat_tmp) { CMAT_ERR_INVALID_OPERAND };
+
+	if ((a.rows > 1 && b.rows > 1 && a.rows != b.rows) ||
+	    (a.cols > 1 && b.cols > 1 && a.cols != b.cols))
+		return (cmat_tmp) { CMAT_ERR_CANT_BROADCAST };
+
 	cmat c = cmat_create(rows, cols).get;
 	if (c.status != CMAT_VALID)
-		return (cmat_tmp) { .status = CMAT_OUT_OF_MEMORY };
+		return cmat_move(&c);
 
 	size_t dra = (a.rows == rows);
 	size_t drb = (b.rows == rows);
@@ -93,7 +117,7 @@ cmat_tmp cmat_add_mm(cmat a, cmat b) {
 	CMAT_TO_VLA(c, cdata);
 
 	for (size_t r = 0, ra = 0, rb = 0; r < rows; r++, ra += dra, rb += drb) {
-	for (size_t c = 0, ca = 0, cb = 0; c < cols; c++, ra += dca, rb += dcb) {
+	for (size_t c = 0, ca = 0, cb = 0; c < cols; c++, ca += dca, cb += dcb) {
 		cdata[r][c] = adata[ra][ca] + bdata[rb][cb];
 	}}
 
