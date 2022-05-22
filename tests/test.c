@@ -5,7 +5,7 @@
 
 int main(void) {
 	cmat m = cmat_from_array(2,3,(float[2][3]){{1,2,3},{4,5,6}}).get;
-	cmat m2 = cmat_add(m, m).get;
+	cmat m2 = cmat_add(m, cmat_add(m, cmat_scalar(2))).get;
 
 	CMAT_TO_VLA(m2, arr);
 	for (size_t r = 0; r < m2.rows; ++r) {

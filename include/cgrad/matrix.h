@@ -35,12 +35,14 @@ inline bool cmat_is_scalar(cmat m) { return m.rows == 1 && m.cols == 1; }
 
 #define CMAT__DATA(m) (cmat_is_scalar(m) ? (m).scalar : (m).data)
 
+__attribute__((always_inline))
 inline cmat_tmp cmat_move(cmat* m) {
 	cmat_tmp res = { .get = *m };
 	*m = (cmat) { .status = CMAT_DELETED };
 	return res;
 }
 
+__attribute__((always_inline))
 inline cmat cmat_scalar(float val) {
 	return (cmat) { .rows = 1, .cols = 1, .scalar = val };
 }
@@ -58,6 +60,7 @@ inline cmat_tmp cmat_create(size_t rows, size_t cols) {
 
 cmat cmat_wrap_array(size_t rows, size_t cols, float data[static rows][cols]);
 
+__attribute__((always_inline))
 inline cmat_tmp cmat_from_array(size_t rows, size_t cols, float data[static rows][cols]) {
 	cmat res = cmat_create(rows, cols).get;
 	if (res.status == CMAT_VALID)
@@ -65,6 +68,7 @@ inline cmat_tmp cmat_from_array(size_t rows, size_t cols, float data[static rows
 	return cmat_move(&res);
 }
 
+__attribute__((always_inline))
 inline void cmat_del(cmat *m) {
 	if (!cmat_is_scalar(*m))
 		free(m->data);
@@ -73,12 +77,33 @@ inline void cmat_del(cmat *m) {
 
 #define CMAT_TO_VLA(m, vla) float (*vla)[m.cols] = CMAT__DATA(m)
 
-#define cmat_add cmat_add_mm
-
 cmat_tmp cmat_add_mm(cmat a, cmat b);
-cmat_tmp cmat_add_mt(cmat a, cmat_tmp b);
-cmat_tmp cmat_add_tm(cmat_tmp a, cmat b);
-cmat_tmp cmat_add_tt(cmat_tmp a, cmat_tmp b);
+
+__attribute__((always_inline))
+inline cmat_tmp cmat_add_mt(cmat a, cmat_tmp b) {
+	cmat_tmp res = cmat_add_mm(a, b.get);
+	cmat_del(&b.get);
+	return res;
+}
+
+__attribute__((always_inline))
+inline cmat_tmp cmat_add_tm(cmat_tmp a, cmat b) {
+	cmat_tmp res = cmat_add_mm(a.get, b);
+	cmat_del(&a.get);
+	return res;
+}
+
+__attribute__((always_inline))
+inline cmat_tmp cmat_add_tt(cmat_tmp a, cmat_tmp b) {
+	cmat_tmp res = cmat_add_mm(a.get, b.get);
+	cmat_del(&a.get);
+	cmat_del(&b.get);
+	return res;
+}
+
+#define cmat_add(a,b) \
+	_Generic(a, cmat:     _Generic(b, cmat: cmat_add_mm, cmat_tmp: cmat_add_mt), \
+	            cmat_tmp: _Generic(b, cmat: cmat_add_tm, cmat_tmp: cmat_add_tt))(a,b)
 
 #ifdef CMAT_IMPLEMENTATION
 
@@ -123,5 +148,8 @@ cmat_tmp cmat_add_mm(cmat a, cmat b) {
 
 	return cmat_move(&c);
 }
+cmat_tmp cmat_add_mt(cmat a, cmat_tmp b);
+cmat_tmp cmat_add_tm(cmat_tmp a, cmat b);
+cmat_tmp cmat_add_tt(cmat_tmp a, cmat_tmp b);
 
 #endif
