@@ -88,6 +88,22 @@ void cmat_del(cmat *m) {
 
 #define CMAT_TO_VLA(m, vla) float (*vla)[m.cols] = CMAT__DATA(m)
 
+static inline cmat cmat_get(cmat_tmp tmp) { return tmp.get; }
+static inline cmat cmat_noop(cmat m) { return m; }
+
+cmat_tmp cmat_add__internal(cmat a, cmat b, bool del_a, bool del_b);
+
+#define CMAT__OP_UNPACK(op, a, b) \
+	cmat_ ## op ## _internal( \
+		_Generic((a), cmat: cmat_noop, cmat_tmp: cmat_get)(a), \
+		_Generic((b), cmat: cmat_noop, cmat_tmp: cmat_get)(b), \
+		_Generic((a), cmat: 0, cmat_tmp: 1),                   \
+		_Generic((b), cmat: 0, cmat_tmp: 1))
+
+#define cmat_add(a,b) CMAT__OP_UNPACK(add, a, b)
+
+#if 0
+//#define CMAT_IS_TMP(m) _Generic((m), cmat: 0, cmat_tmp: 1)
 cmat_tmp cmat_add_mm(cmat a, cmat b);
 
 static inline
@@ -111,10 +127,11 @@ cmat_tmp cmat_add_tt(cmat_tmp a, cmat_tmp b) {
 	cmat_del(&b.get);
 	return res;
 }
-
 #define cmat_add(a,b) \
-	_Generic(a, cmat:     _Generic(b, cmat: cmat_add_mm, cmat_tmp: cmat_add_mt), \
-	            cmat_tmp: _Generic(b, cmat: cmat_add_tm, cmat_tmp: cmat_add_tt))(a,b)
+	(_Generic((a), cmat:     _Generic((b), cmat: cmat_add_mm, cmat_tmp: cmat_add_mt), \
+	               cmat_tmp: _Generic((b), cmat: cmat_add_tm, cmat_tmp: cmat_add_tt))(a,b))
+#endif
+
 
 #ifdef CMAT_IMPLEMENTATION
 
@@ -132,34 +149,45 @@ cmat_tmp cmat_add_tm(cmat_tmp a, cmat b);
 cmat_tmp cmat_add_tt(cmat_tmp a, cmat_tmp b);
 #endif
 
-cmat_tmp cmat_add_mm(cmat a, cmat b) {
+cmat_tmp cmat_add_internal(cmat a, cmat b, bool del_a, bool del_b) {
 	size_t rows = a.rows > b.rows ? a.rows : b.rows;
 	size_t cols = a.cols > b.cols ? a.cols : b.cols;
 
-	if (a.status != CMAT_VALID || b.status != CMAT_VALID)
-		return (cmat_tmp) { CMAT_ERR_INVALID_OPERAND };
+	cmat c = { 0 };
 
+	c.status = CMAT_ERR_INVALID_OPERAND;
+	if (a.status != CMAT_VALID || b.status != CMAT_VALID)
+		goto done;
+
+	c.status = CMAT_ERR_CANT_BROADCAST;
 	if ((a.rows > 1 && b.rows > 1 && a.rows != b.rows) ||
 	    (a.cols > 1 && b.cols > 1 && a.cols != b.cols))
-		return (cmat_tmp) { CMAT_ERR_CANT_BROADCAST };
+		goto done;
 
-	cmat c = cmat_create(rows, cols).get;
+	c = cmat_create(rows, cols).get;
 	if (c.status != CMAT_VALID)
-		return cmat_move(&c);
+		goto done;
 
 	size_t dra = (a.rows == rows);
 	size_t drb = (b.rows == rows);
 	size_t dca = (a.cols == cols);
 	size_t dcb = (b.cols == cols);
 
-	CMAT_TO_VLA(a, adata);
-	CMAT_TO_VLA(b, bdata);
-	CMAT_TO_VLA(c, cdata);
+	// limit scope of VLA types
+	{
+		CMAT_TO_VLA(a, adata);
+		CMAT_TO_VLA(b, bdata);
+		CMAT_TO_VLA(c, cdata);
 
-	for (size_t r = 0, ra = 0, rb = 0; r < rows; r++, ra += dra, rb += drb) {
-	for (size_t c = 0, ca = 0, cb = 0; c < cols; c++, ca += dca, cb += dcb) {
-		cdata[r][c] = adata[ra][ca] + bdata[rb][cb];
-	}}
+		for (size_t r = 0, ra = 0, rb = 0; r < rows; r++, ra += dra, rb += drb) {
+		for (size_t c = 0, ca = 0, cb = 0; c < cols; c++, ca += dca, cb += dcb) {
+			cdata[r][c] = adata[ra][ca] + bdata[rb][cb];
+		}}
+	}
+
+done:
+	if (del_a) cmat_del(&a);
+	if (del_b) cmat_del(&b);
 
 	return cmat_move(&c);
 }
